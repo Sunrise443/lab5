@@ -108,18 +108,3 @@ WHERE DATE_PART('year', order_date) = 2023;
 EXPLAIN ANALYZE
 DELETE FROM order_items
 WHERE quantity < 2;
-
--- 5. Добавляем индексы и показываем разницу
-
--- Создаем недостающие индексы
-CREATE INDEX idx_orders_customer_id ON orders(customer_id);
-CREATE INDEX idx_orders_order_date ON orders(order_date);
-CREATE INDEX idx_order_items_order_id ON order_items(order_id);
-CREATE INDEX idx_order_items_quantity ON order_items(quantity);
-CREATE INDEX idx_customers_created_at ON customers(created_at);
-
--- Удаляем дублирующийся индекс
-DROP INDEX idx_customers_email_duplicate;
-
--- Создаем функциональный индекс для запроса с LOWER
-CREATE INDEX idx_customers_lower_name ON customers(LOWER(name));
