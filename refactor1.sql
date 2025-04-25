@@ -1,38 +1,48 @@
--- 1. Создаем тестовые таблицы с проблемами индексации
-DROP TABLE IF EXISTS order_items;
-DROP TABLE IF EXISTS orders;
-DROP TABLE IF EXISTS customers;
+-- 1. Создаем нормализованные таблицы с правильными индексами и ограничениями
+DROP TABLE IF EXISTS order_items CASCADE;
+DROP TABLE IF EXISTS orders CASCADE;
+DROP TABLE IF EXISTS customers CASCADE;
 
--- Таблица customers с избыточными индексами
+-- Таблица customers с оптимальными индексами
 CREATE TABLE customers (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(255),
-    email VARCHAR(255),
-    created_at TIMESTAMP DEFAULT now()
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,  -- Заменяем два индекса на UNIQUE CONSTRAINT
+    created_at TIMESTAMP DEFAULT now() NOT NULL
 );
 
--- Дублирующийся индекс (избыточность)
+-- Создаем один индекс для email
 CREATE INDEX idx_customers_email ON customers(email);
-CREATE INDEX idx_customers_email_duplicate ON customers(email); -- Дубликат!
 
--- Таблица orders без важных индексов
+-- Таблица orders с необходимыми индексами и внешними ключами
 CREATE TABLE orders (
     id SERIAL PRIMARY KEY,
-    customer_id INT, -- Нет индекса для JOIN
-    amount DECIMAL(10,2),
-    order_date DATE, -- Нет индекса для частых запросов по дате
-    status VARCHAR(20),
-    notes TEXT
+    customer_id INT NOT NULL REFERENCES customers(id),
+    amount DECIMAL(10,2) CHECK (amount >= 0),
+    order_date DATE NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    notes TEXT,
+    CONSTRAINT valid_status CHECK (status IN ('pending', 'completed', 'canceled'))
 );
 
--- Таблица order_items без индексов для соединений
+-- Индексы для частых запросов
+CREATE INDEX idx_orders_customer_id ON orders(customer_id);
+CREATE INDEX idx_orders_order_date ON orders(order_date);
+CREATE INDEX idx_orders_status ON orders(status);
+
+-- Таблица order_items с оптимальными индексами
 CREATE TABLE order_items (
     id SERIAL PRIMARY KEY,
-    order_id INT, -- Нет индекса для JOIN
-    product_id INT, -- Нет индекса
-    quantity INT, -- Нет индекса для фильтрации
-    price DECIMAL(10,2)
+    order_id INT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    product_id INT NOT NULL,
+    quantity INT NOT NULL CHECK (quantity > 0),
+    price DECIMAL(10,2) NOT NULL CHECK (price >= 0)
 );
+
+-- Индексы для соединений и фильтрации
+CREATE INDEX idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX idx_order_items_product_id ON order_items(product_id);
+CREATE INDEX idx_order_items_quantity ON order_items(quantity);
 
 -- 2. Заполняем таблицы тестовыми данными
 INSERT INTO customers (name, email)
@@ -66,45 +76,58 @@ ANALYZE order_items;
 
 -- 4. Запускаем проблемные запросы с EXPLAIN ANALYZE
 
--- Запрос 1: Полное сканирование с SELECT * и сложными JOIN
+-- Запрос 1: Явный выбор полей + оптимизированные JOIN
 EXPLAIN ANALYZE
-SELECT *
+SELECT 
+    o.id AS order_id,
+    o.order_date,
+    c.name AS customer_name,
+    c.email,
+    oi.product_id,
+    oi.quantity
 FROM orders o
 JOIN customers c ON o.customer_id = c.id
 JOIN order_items oi ON o.id = oi.order_id
 WHERE c.email LIKE '%@gmail.com'
-  AND o.order_date > '2023-01-01'
+  AND o.order_date BETWEEN '2023-01-01' AND CURRENT_DATE
 ORDER BY o.order_date DESC;
 
--- Запрос 2: Неэффективный подзапрос вместо JOIN
+-- Запрос 2: Замена подзапроса на JOIN
 EXPLAIN ANALYZE
 SELECT 
     c.name,
-    (SELECT COUNT(*) FROM orders WHERE customer_id = c.id) AS order_count
+    COUNT(o.id) AS order_count
 FROM customers c
-WHERE c.created_at > '2023-01-01';
+LEFT JOIN orders o ON c.id = o.customer_id
+WHERE c.created_at > '2023-01-01'
+GROUP BY c.id;
 
--- Запрос 3: Использование функции в WHERE обходит индексы
+-- Запрос 3: Используем функциональный индекс
 EXPLAIN ANALYZE
-SELECT *
+SELECT id, name, email
 FROM customers
 WHERE LOWER(name) = 'customer 5000';
 
--- Запрос 4: Множественные LEFT JOIN с избыточными данными
+-- Запрос 4: Пагинация и фильтрация по префиксу
 EXPLAIN ANALYZE
-SELECT *
+SELECT 
+    c.id AS customer_id,
+    c.name,
+    o.id AS order_id,
+    oi.product_id
 FROM customers c
 LEFT JOIN orders o ON c.id = o.customer_id
 LEFT JOIN order_items oi ON o.id = oi.order_id
-WHERE c.name LIKE 'Customer 1%';
+WHERE c.name LIKE 'Customer 1%'
+LIMIT 100;
 
--- Запрос 5: UPDATE с полным сканированием
+-- Запрос 5: Оптимизация условия даты
 EXPLAIN ANALYZE
 UPDATE orders
 SET notes = 'processed'
-WHERE DATE_PART('year', order_date) = 2023;
+WHERE order_date BETWEEN '2023-01-01' AND '2023-12-31';
 
--- Запрос 6: DELETE без использования индекса
+-- Запрос 6: Использование индекса для диапазона
 EXPLAIN ANALYZE
 DELETE FROM order_items
 WHERE quantity < 2;
