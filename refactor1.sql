@@ -123,21 +123,3 @@ DROP INDEX idx_customers_email_duplicate;
 
 -- Создаем функциональный индекс для запроса с LOWER
 CREATE INDEX idx_customers_lower_name ON customers(LOWER(name));
-
--- 6. Повторяем запросы для сравнения производительности
-
--- Запрос 1 с индексами
-EXPLAIN ANALYZE
-SELECT o.id, o.order_date, c.name, c.email, oi.product_id, oi.quantity -- Явный список полей вместо *
-FROM orders o
-JOIN customers c ON o.customer_id = c.id
-JOIN order_items oi ON o.id = oi.order_id
-WHERE c.email LIKE '%@gmail.com'
-  AND o.order_date > '2023-01-01'
-ORDER BY o.order_date DESC;
-
--- Запрос 3 с функциональным индексом
-EXPLAIN ANALYZE
-SELECT id, name, email
-FROM customers
-WHERE LOWER(name) = 'customer 5000';
